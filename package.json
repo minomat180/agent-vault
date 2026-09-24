@@ -1,0 +1,22 @@
+{
+  "name": "pi-vault-linux",
+  "version": "0.1.0",
+  "description": "Agentic vault for Pi (Linux port): let an agent use a secret it never gets to see, backed by libsecret/gnome-keyring",
+  "type": "module",
+  "license": "MIT",
+  "engines": {
+    "node": ">=22"
+  },
+  "files": [
+    "index.ts",
+    "README.md"
+  ],
+  "pi": {
+    "extensions": [
+      "./index.ts"
+    ]
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": ">=0.80.0"
+  }
+}
