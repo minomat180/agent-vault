@@ -2,7 +2,8 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { execFile, spawn } from "node:child_process";
 import { appendFileSync, mkdirSync } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
+import { approve } from "./capri-approval.ts";
 
 /**
  * pi-vault (Linux port): let an agent use a secret without ever seeing it.
@@ -82,7 +83,9 @@ export default function vault(pi: ExtensionAPI) {
       // secret. Drive the selector directly instead, with denial as the default.
       const deny = `No, deny "${name}"`;
       const allow = `Yes, release "${name}"`;
-      const choice = await ctx.ui.select(
+      // Asked in the terminal and on Capri (if she's running); first answer wins.
+      const { choice, via } = await approve(
+        ctx,
         [
           `Release secret "${name}"?`,
           reason,
@@ -90,12 +93,13 @@ export default function vault(pi: ExtensionAPI) {
           `cwd:     ${process.cwd()}`,
           `command: ${command.join(" ")}`,
         ].join("\n"),
-        [deny, allow],
+        { deny, allow },
+        { vault: "keyring", label: name, reason, command: command.join(" "), cwd: process.cwd(), agent: "pi", session: basename(process.cwd()) },
       );
 
       // Cancelling or dismissing is a denial, never a release.
       if (choice !== allow) {
-        audit({ name, reason, command, decision: "denied" });
+        audit({ name, reason, command, decision: "denied", via });
         return text(`Denied by user: "${name}" was not released.`);
       }
 
@@ -110,7 +114,7 @@ export default function vault(pi: ExtensionAPI) {
       }
 
       const result = await run(command, secret);
-      audit({ name, reason, command, decision: "approved", exitCode: result.code });
+      audit({ name, reason, command, decision: "approved", via, exitCode: result.code });
 
       return text(
         [

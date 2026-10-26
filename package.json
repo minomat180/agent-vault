@@ -9,6 +9,7 @@
   },
   "files": [
     "index.ts",
+    "capri-approval.ts",
     "README.md"
   ],
   "pi": {
