@@ -84,7 +84,7 @@ export default function vault(pi: ExtensionAPI) {
       const deny = `No, deny "${name}"`;
       const allow = `Yes, release "${name}"`;
       // Asked in the terminal and on Capri (if she's running); first answer wins.
-      const { choice, via } = await approve(
+      const { choice, via, report } = await approve(
         ctx,
         [
           `Release secret "${name}"?`,
@@ -108,6 +108,7 @@ export default function vault(pi: ExtensionAPI) {
         secret = await readSecret(name);
       } catch {
         audit({ name, reason, command, decision: "error", note: "not in keyring" });
+        report({ error: "it's not in the keyring" });
         return text(
           `No secret named "${name}" in the vault. Add it with:\n  secret-tool store --label='${SERVICE}: ${name}' service ${SERVICE} account ${name}`,
         );
@@ -115,6 +116,7 @@ export default function vault(pi: ExtensionAPI) {
 
       const result = await run(command, secret);
       audit({ name, reason, command, decision: "approved", via, exitCode: result.code });
+      report({ exitCode: result.code });
 
       return text(
         [
