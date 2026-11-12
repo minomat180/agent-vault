@@ -151,15 +151,28 @@ async function t3Call(tool: string, args: Record<string, unknown>): Promise<any>
 // Find this dialog's question card in T3 (same title, same two options) and answer it with
 // `choice`. Throws if it can't.
 async function answerInT3(title: string, options: { deny: string; allow: string }, choice: string): Promise<void> {
-  const list = await t3Call("t3_pending_request_list", {});
+  // T3 0.1.2+ folded list/read/respond into one `t3_pending_request` tool with an `action`;
+  // older builds had three separate tools. Try the new shape, fall back to the old names.
+  let shape: "one" | "three" = "one";
+  const ask = (action: "list" | "read" | "respond", args: Record<string, unknown> = {}) =>
+    (shape === "one"
+      ? t3Call("t3_pending_request", { action, ...args })
+      : t3Call(`t3_pending_request_${action}`, args));
+  let list: any;
+  try {
+    list = await ask("list");
+  } catch {
+    shape = "three";
+    list = await ask("list");
+  }
   for (const requestId of list?.requestIds ?? []) {
-    const read = await t3Call("t3_pending_request_read", { requestId });
+    const read = await ask("read", { requestId });
     const q = (read?.questions ?? []).find((q: any) => {
       const values = (q.options ?? []).map((o: any) => o.value);
       return q.header === title && values.includes(options.allow) && values.includes(options.deny);
     });
     if (!q) continue;
-    await t3Call("t3_pending_request_respond", { requestId, answers: { [q.id]: choice } });
+    await ask("respond", { requestId, answers: { [q.id]: choice } });
     return;
   }
   throw new Error("question card not found in T3");
