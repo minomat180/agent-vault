@@ -148,9 +148,9 @@ async function t3Call(tool: string, args: Record<string, unknown>): Promise<any>
   return result?.structuredContent ?? JSON.parse(result?.content?.[0]?.text ?? "null");
 }
 
-// Find this dialog's question card in T3 (same title, same two options) and answer it with
+// Find this dialog's question card in T3 (same two options) and answer it with
 // `choice`. Throws if it can't.
-async function answerInT3(title: string, options: { deny: string; allow: string }, choice: string): Promise<void> {
+async function answerInT3(_title: string, options: { deny: string; allow: string }, choice: string): Promise<void> {
   // T3 0.1.2+ folded list/read/respond into one `t3_pending_request` tool with an `action`;
   // older builds had three separate tools. Try the new shape, fall back to the old names.
   let shape: "one" | "three" = "one";
@@ -169,7 +169,11 @@ async function answerInT3(title: string, options: { deny: string; allow: string 
     const read = await ask("read", { requestId });
     const q = (read?.questions ?? []).find((q: any) => {
       const values = (q.options ?? []).map((o: any) => o.value);
-      return q.header === title && values.includes(options.allow) && values.includes(options.deny);
+      // Match on the two option values only. T3 does not carry our title through: every card
+      // comes back with header "Question", so comparing against `title` never matched and the
+      // card was left to go stale. The options embed the secret's name, which is specific
+      // enough to identify our own dialog.
+      return values.includes(options.allow) && values.includes(options.deny);
     });
     if (!q) continue;
     await ask("respond", { requestId, answers: { [q.id]: choice } });
