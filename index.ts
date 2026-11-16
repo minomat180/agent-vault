@@ -3,6 +3,7 @@ import { execFile, spawn } from "node:child_process";
 import { appendFileSync, mkdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { approve } from "./capri-approval.ts";
 
 /**
@@ -17,14 +18,24 @@ import { approve } from "./capri-approval.ts";
  * The approval prompt lives inside execute() on purpose. A separate "ask first"
  * tool would only be a promise the agent could skip; this is a gate it cannot.
  *
- * Ported from the macOS original (isaaclins/pi-vault), which used the login
- * keychain via the `security` binary. Same caveat applies: an agent with shell
- * access can bypass this with a single `secret-tool lookup ...` while the
- * keyring is unlocked. This keeps secrets out of the transcript and out of
- * argv/ps; it is not yet a hardware-enforced boundary.
+ * Two backends, picked by platform:
+ * - macOS: the login keychain, through macos/pi-vault-keychain (a small Swift
+ *   helper). Items trust only that helper, and it asks for Touch ID before
+ *   every read, so an agent with a shell cannot read them either.
+ * - Linux: the freedesktop Secret Service via `secret-tool`. An agent with
+ *   shell access can bypass this with `secret-tool lookup ...` while the
+ *   keyring is unlocked; there it keeps secrets out of the transcript and out
+ *   of argv/ps, but is not an enforced boundary.
  */
 
 const SERVICE = "pi-vault";
+const MAC = process.platform === "darwin";
+const HELPER = join(dirname(fileURLToPath(import.meta.url)), "macos", "pi-vault-keychain");
+const BACKEND = MAC ? "keychain" : "keyring";
+const addHint = (name: string) =>
+  MAC
+    ? `${HELPER} set ${name}`
+    : `secret-tool store --label='${SERVICE}: ${name}' service ${SERVICE} account ${name}`;
 const AUDIT = join(homedir(), ".local/state/pi-vault/audit.log");
 const REDACTED = "<redacted by pi-vault>";
 
@@ -94,7 +105,7 @@ export default function vault(pi: ExtensionAPI) {
           `command: ${command.join(" ")}`,
         ].join("\n"),
         { deny, allow },
-        { vault: "keyring", label: name, reason, command: command.join(" "), cwd: process.cwd(), agent: "pi", session: basename(process.cwd()) },
+        { vault: BACKEND, label: name, reason, command: command.join(" "), cwd: process.cwd(), agent: "pi", session: basename(process.cwd()) },
       );
 
       // Cancelling or dismissing is a denial, never a release.
@@ -105,13 +116,21 @@ export default function vault(pi: ExtensionAPI) {
 
       let secret: string;
       try {
-        secret = await readSecret(name);
-      } catch {
-        audit({ name, reason, command, decision: "error", note: "not in keyring" });
-        report({ error: "it's not in the keyring" });
-        return text(
-          `No secret named "${name}" in the vault. Add it with:\n  secret-tool store --label='${SERVICE}: ${name}' service ${SERVICE} account ${name}`,
-        );
+        secret = await readSecret(name, reason);
+      } catch (e: any) {
+        if (e?.code === 3) {
+          audit({ name, reason, command, decision: "denied", via: "touchid" });
+          report({ error: "Touch ID was denied" });
+          return text(`Denied at Touch ID: "${name}" was not released.`);
+        }
+        if (e?.code === 2 || e?.message === "empty" || !MAC) {
+          audit({ name, reason, command, decision: "error", note: `not in ${BACKEND}` });
+          report({ error: `it's not in the ${BACKEND}` });
+          return text(`No secret named "${name}" in the vault. The user can add it with:\n  ${addHint(name)}`);
+        }
+        audit({ name, reason, command, decision: "error", note: String(e?.message ?? e) });
+        report({ error: "the keychain helper failed" });
+        return text(`Could not read "${name}": ${String(e?.message ?? e)}`);
       }
 
       const result = await run(command, secret);
@@ -151,7 +170,22 @@ export default function vault(pi: ExtensionAPI) {
 }
 
 /** Reads one secret. The value goes to stdout only, never argv. */
-function readSecret(name: string): Promise<string> {
+function readSecret(name: string, reason: string): Promise<string> {
+  if (MAC) {
+    return new Promise((resolve, reject) => {
+      // No timeout: the helper waits for Touch ID, which takes as long as it takes.
+      execFile(HELPER, ["get", name, reason], { maxBuffer: 1 << 20 }, (error: any, stdout, stderr) => {
+        if (error) {
+          if (error.code === "ENOENT") return reject(new Error(`helper not built: run ${dirname(HELPER)}/build.sh`));
+          const err: any = new Error(String(stderr || error.message).trim());
+          err.code = error.code;
+          return reject(err);
+        }
+        if (stdout === "") return reject(new Error("empty"));
+        resolve(stdout);
+      });
+    });
+  }
   return new Promise((resolve, reject) => {
     execFile(
       "secret-tool",
@@ -168,6 +202,14 @@ function readSecret(name: string): Promise<string> {
 
 /** Lists secret names by searching the service attribute. Values never leave the keyring. */
 function listSecretNames(): Promise<string[]> {
+  if (MAC) {
+    return new Promise((resolve, reject) => {
+      execFile(HELPER, ["list"], (error: any, stdout, stderr) => {
+        if (error) return reject(new Error(error.code === "ENOENT" ? `helper not built: run ${dirname(HELPER)}/build.sh` : String(stderr || error.message).trim()));
+        resolve(stdout.split("\n").map((s) => s.trim()).filter(Boolean));
+      });
+    });
+  }
   return new Promise((resolve, reject) => {
     execFile("secret-tool", ["search", "--all", "service", SERVICE], (error, _stdout, stderr) => {
       // `secret-tool search` writes the attribute dump to stderr.

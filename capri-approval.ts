@@ -21,7 +21,7 @@
 const CAPRI = `http://127.0.0.1:${process.env.CAPRI_PORT || 47823}`;
 
 export interface CapriApprovalInfo {
-  vault: "ipod" | "keyring";
+  vault: "ipod" | "keyring" | "keychain";
   label: string;
   reason: string;
   command: string;
