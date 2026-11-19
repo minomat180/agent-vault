@@ -1,0 +1,55 @@
+#!/usr/bin/env bash
+# vault-run NAME REASON -- command [args...]
+#
+# Reads NAME from agent-vault (macOS: Touch ID prompt naming the secret and the
+# reason; Linux: Secret Service, no prompt), hands it to that one command as
+# $AGENT_VAULT_SECRET, merges stderr into stdout and replaces the value with
+# [REDACTED] in the output. Every attempt is logged to
+# ~/.local/state/agent-vault/audit.log (name, reason, cwd, command, result;
+# never the value). The exit status is the command's.
+set -uo pipefail
+
+if (( $# < 4 )) || [[ $3 != -- ]]; then
+  echo 'usage: vault-run NAME REASON -- command [args...]' >&2; exit 64
+fi
+name=$1 reason=$2; shift 3
+
+log=${XDG_STATE_HOME:-$HOME/.local/state}/agent-vault/audit.log
+mkdir -p "${log%/*}"
+audit() {
+  local result=$1; shift
+  perl -MPOSIX=strftime -e '
+    sub j { my $s = shift; $s =~ s/(["\\])/\\$1/g; $s =~ s/([\x00-\x1f])/sprintf("\\u%04x", ord $1)/ge; "\"$s\"" }
+    my ($result, $name, $reason, $cwd, @cmd) = @ARGV;
+    printf "{\"ts\":%s,\"host\":%s,\"name\":%s,\"reason\":%s,\"cwd\":%s,\"command\":%s,\"result\":%s}\n",
+      j(strftime("%Y-%m-%dT%H:%M:%SZ", gmtime)), j(`hostname -s` =~ s/\s+$//r), j($name), j($reason), j($cwd),
+      j(join(" ", @cmd)), j($result);
+  ' "$result" "$name" "$reason" "$PWD" "$@" >> "$log" 2>/dev/null
+}
+
+if ! secret=$(AGENT_VAULT_CALLER=vault-run agent-vault get "$name" "$reason"); then
+  audit not-released "$@"
+  echo "vault-run: $name not released" >&2
+  exit 1
+fi
+if [[ -z $secret ]]; then
+  audit empty "$@"
+  echo "vault-run: $name is empty" >&2
+  exit 1
+fi
+audit released "$@"
+
+# The redactor gets the value through its environment, never argv. Besides the
+# whole value it also masks each line of a multi-line value (8+ characters),
+# since output is processed line by line.
+AGENT_VAULT_SECRET=$secret "$@" 2>&1 |
+  AGENT_VAULT_REDACT=$secret perl -pe '
+    BEGIN {
+      $| = 1;
+      my $s = delete $ENV{AGENT_VAULT_REDACT};
+      @pats = sort { length $b <=> length $a } grep { length >= 8 } ($s, split /\r?\n/, $s);
+      push @pats, $s if length $s && length $s < 8;
+    }
+    for my $p (@pats) { s/\Q$p\E/[REDACTED]/g }
+  '
+exit "${PIPESTATUS[0]}"

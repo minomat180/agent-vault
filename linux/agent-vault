@@ -1,0 +1,91 @@
+#!/usr/bin/env bash
+# agent-vault: the Linux backend, on the freedesktop Secret Service via secret-tool.
+#
+# Secrets are items with attributes service=agent-vault account=NAME and the
+# label "agent-vault: NAME". Items under the old service name "pi-vault" are
+# still read as a fallback until `agent-vault migrate` has moved them.
+#
+#   agent-vault set NAME          value from stdin (secret-tool prompts on a tty)
+#   agent-vault list              names only, never values
+#   agent-vault delete NAME
+#   agent-vault migrate [NAME..]  copy legacy pi-vault items, verify, then clear them
+#   agent-vault get NAME [WHY]    value on stdout; only for vault-run
+#
+# Not a security boundary: while the keyring is unlocked any process of this
+# user can run `secret-tool lookup`. This keeps values out of the transcript,
+# out of argv and out of command output. Exit codes: 0 ok, 1 other, 2 not found.
+set -uo pipefail
+
+SERVICE=agent-vault
+LEGACY=pi-vault
+
+die() { printf 'agent-vault: %s\n' "$1" >&2; exit "${2:-1}"; }
+valid() { [[ $1 =~ ^[A-Za-z0-9_.-]{1,128}$ ]]; }
+command -v secret-tool >/dev/null || die "secret-tool not found (libsecret)"
+
+# secret-tool search prints values on stdout and attributes on stderr: keep
+# only stderr, so values never reach a pipe here.
+names() {
+  secret-tool search --all service "$1" 2>&1 >/dev/null |
+    sed -n 's/^attribute\.account = //p' | sort -u
+}
+has() { secret-tool lookup service "$1" account "$2" >/dev/null 2>&1; }
+digest() { secret-tool lookup service "$1" account "$2" 2>/dev/null | sha256sum | cut -d' ' -f1; }
+
+cmd=${1:-}
+case $cmd in
+  list)
+    current=$(names "$SERVICE")
+    legacy=$(names "$LEGACY")
+    printf '%s\n%s\n' "$current" "$legacy" | sed '/^$/d' | sort -u
+    pending=$(comm -13 <(printf '%s\n' "$current") <(printf '%s\n' "$legacy") | sed '/^$/d' | wc -l)
+    (( pending > 0 )) && printf 'agent-vault: %s of these are still under the legacy service "%s"; `agent-vault migrate` moves them\n' "$pending" "$LEGACY" >&2
+    exit 0 ;;
+  set)
+    [[ $# -eq 2 ]] && valid "$2" || die "usage: set NAME (letters, digits, _ - .)"
+    secret-tool store --label="$SERVICE: $2" service "$SERVICE" account "$2" || die "could not store $2"
+    has "$SERVICE" "$2" || die "could not store $2"
+    echo "stored $2 (service $SERVICE)" ;;
+  get)
+    [[ $# -ge 2 ]] && valid "$2" || die "usage: get NAME [REASON]"
+    [[ ${AGENT_VAULT_CALLER:-} == vault-run ]] ||
+      die "use vault-run NAME \"reason\" -- command; get only serves vault-run"
+    for svc in "$SERVICE" "$LEGACY"; do
+      has "$svc" "$2" && exec secret-tool lookup service "$svc" account "$2"
+    done
+    die "no secret named $2" 2 ;;
+  delete)
+    [[ $# -eq 2 ]] && valid "$2" || die "usage: delete NAME"
+    found=0
+    for svc in "$SERVICE" "$LEGACY"; do
+      if has "$svc" "$2"; then secret-tool clear service "$svc" account "$2" && found=1; fi
+    done
+    (( found )) || die "no secret named $2" 2
+    echo "deleted $2" ;;
+  migrate)
+    shift
+    if (( $# )); then todo=$(printf '%s\n' "$@"); else todo=$(names "$LEGACY"); fi
+    [[ -n $todo ]] || { echo "nothing to migrate"; exit 0; }
+    failed=0
+    while IFS= read -r n; do
+      valid "$n" || { echo "agent-vault: $n: invalid name, skipped" >&2; failed=1; continue; }
+      has "$LEGACY" "$n" || { echo "agent-vault: $n: not under $LEGACY, skipped" >&2; continue; }
+      old=$(digest "$LEGACY" "$n")
+      if has "$SERVICE" "$n"; then
+        [[ $(digest "$SERVICE" "$n") == "$old" ]] ||
+          { echo "agent-vault: $n: already under $SERVICE with a different value, left both alone" >&2; failed=1; continue; }
+      else
+        # Value goes lookup -> store through a pipe; it is never in a variable.
+        secret-tool lookup service "$LEGACY" account "$n" |
+          secret-tool store --label="$SERVICE: $n" service "$SERVICE" account "$n"
+      fi
+      if [[ $(digest "$SERVICE" "$n") == "$old" ]]; then
+        secret-tool clear service "$LEGACY" account "$n" && echo "migrated $n"
+      else
+        echo "agent-vault: $n: copy does not match, legacy item kept" >&2; failed=1
+      fi
+    done <<< "$todo"
+    exit "$failed" ;;
+  *)
+    die "usage: agent-vault list | set NAME | delete NAME | migrate [NAME...]  (use vault-run to use a secret)" ;;
+esac

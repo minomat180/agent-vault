@@ -1,75 +1,100 @@
-# pi-vault (Linux port)
+# agent-vault
 
-An agentic vault for [Pi](https://github.com/earendil-works/pi-coding-agent). The agent can *use* a secret without ever *seeing* it.
+Let a coding agent (Claude Code) *use* a secret without ever *seeing* it.
 
-This is a **Linux port** of [isaaclins/pi-vault](https://github.com/isaaclins/pi-vault), which was macOS-only (login keychain via the `security` binary). Here the store is the freedesktop **Secret Service** (libsecret / gnome-keyring) accessed through `secret-tool`.
+The agent names a secret and one command. `vault-run` reads the secret, hands it
+to that command as `$AGENT_VAULT_SECRET`, and replaces the value with
+`[REDACTED]` in the output. The agent only ever sees names.
 
-Instead of pasting an API key into the chat, where it lives in the transcript forever, the agent names a secret and a command. You approve or deny. On approval the secret is read from the keyring and handed to that one child process as `$PI_VAULT_SECRET`.
+Originally based on [isaaclins/pi-vault](https://github.com/isaaclins/pi-vault).
+Two backends behind the same commands, picked by platform:
 
-## Status: not a security boundary yet
+- **macOS**: the login keychain, through `macos/agent-vault`, a small Swift
+  helper that asks for **Touch ID on every read**.
+- **Linux**: the freedesktop **Secret Service** (gnome-keyring, KeePassXC)
+  through `secret-tool`.
 
-An agent with shell access can bypass this with one command while the keyring is unlocked:
+## Commands
 
 ```bash
-secret-tool lookup service pi-vault account YOUR_SECRET
+agent-vault list                 # names only, never values
+agent-vault set NAME             # value from a hidden prompt or stdin, never argv
+agent-vault delete NAME
+agent-vault migrate [NAME...]    # move items from the old "pi-vault" service
+
+vault-run NAME "reason" -- command [args...]
 ```
 
-The gnome-keyring login collection is unlocked for your whole session, so that read succeeds with no prompt. What this buys you today: the secret stays out of the model's context and out of your transcript, it never appears in argv where `ps` can see it, and it is redacted if a command echoes it. Those are protections against accident and drift, not against intent.
+Example:
 
-A hardware-enforced equivalent of macOS Touch ID would need a keyring backend that prompts per-read (e.g. a separately-locked collection you unlock on demand). Until then, treat this as a convenience wrapper.
+```bash
+vault-run CLOUDFLARE_API_TOKEN "verify the token" -- \
+  sh -c 'curl -sH "Authorization: Bearer $AGENT_VAULT_SECRET" https://api.cloudflare.com/client/v4/user/tokens/verify'
+```
 
-## Requirements
-
-- `secret-tool` (Void: `xbps-install -S libsecret`)
-- a running Secret Service daemon (gnome-keyring or KeePassXC's Secret Service)
+`vault-run` merges stderr into stdout, redacts the value (and each line of a
+multi-line value), and exits with the command's status. Every attempt appends
+one JSON line (time, host, name, reason, cwd, command, result; never the
+value) to `~/.local/state/agent-vault/audit.log`.
 
 ## Install
 
-Local checkout:
+```bash
+./install.sh
+```
+
+It links `agent-vault` and `vault-run` into `~/.local/bin` and the Claude Code
+skill `skill/` to `~/.claude/skills/vault`. On macOS it first builds the helper
+with `macos/build.sh` (needs the Xcode command line tools).
+
+## macOS
+
+Items live in the login keychain, service `agent-vault`, label
+`agent-vault: NAME` (Keychain Access shows them; they are not in the Passwords
+app or iCloud Keychain).
+
+Why this one is an actual boundary:
+
+- Each item is created by the helper, so its access list trusts only the
+  helper's code signature. `security find-generic-password -w` from any other
+  process gets the macOS keychain dialog, asking for the login password.
+- The helper asks for Touch ID (login password as fallback) before every read,
+  naming the secret and the reason. An agent can run it, but it cannot answer
+  the prompt.
+- A modified or rebuilt helper has a different signature, so the keychain
+  dialog comes back. Allow it only if you rebuilt it yourself.
+
+### Moving from pi-vault
+
+Items stored by the old `pi-vault-keychain` helper (service `pi-vault`) are
+still found by `list` and `get`. To move them:
 
 ```bash
-pi install ~/projects/pi-vault
+agent-vault migrate            # all of them
+agent-vault migrate NAME ...   # or just some
 ```
 
-Then `/reload` in Pi.
+It asks for Touch ID once. Because the old items trust only the old helper,
+macOS also shows its keychain dialog for each item: enter the login password
+and click "Allow". Each value is copied, read back and compared before the old
+item is deleted.
 
-## Add a secret
+## Linux
 
-Add secrets yourself so the value never passes through the agent. `secret-tool store` prompts for the value on stdin, keeping it out of shell history and out of `ps`:
+Requires `secret-tool` (libsecret) and a running Secret Service. Items have the
+attributes `service agent-vault account NAME` and the label `agent-vault: NAME`.
+`agent-vault set NAME` lets `secret-tool` prompt for the value, so it never
+passes through the agent. `agent-vault migrate` pipes each old `pi-vault` item
+from `secret-tool lookup` into `secret-tool store`, compares SHA-256 digests,
+and only then clears the old item.
 
-```bash
-secret-tool store --label='pi-vault: OPENAI_API_KEY' service pi-vault account OPENAI_API_KEY
-```
-
-Remove one:
-
-```bash
-secret-tool clear service pi-vault account OPENAI_API_KEY
-```
-
-## Use
-
-The agent calls:
-
-```
-vault_use
-  name:    OPENAI_API_KEY
-  reason:  refresh the expired auth token
-  command: ["sh","-c","curl -sH \"Authorization: Bearer $PI_VAULT_SECRET\" https://api.openai.com/v1/models"]
-```
-
-You get a confirmation showing the name, the reason, the cwd, and the exact command. Denial (including cancel/Escape) reads nothing from the keyring.
-
-`vault_list` returns the **names** of stored secrets only — never any values.
-
-## Audit log
-
-Every request, approved or denied, appends one JSON line to:
-
-```
-~/.local/state/pi-vault/audit.log
-```
+**Not a security boundary.** While the keyring is unlocked, any process of the
+user can run `secret-tool lookup service agent-vault account NAME` with no
+prompt. On Linux this keeps secrets out of the transcript, out of argv (`ps`)
+and out of command output: protection against accident and drift, not intent.
+`agent-vault get` refuses to run unless called by `vault-run`, so an agent does
+not print a value by mistake.
 
 ## License
 
-MIT (same as upstream)
+MIT
