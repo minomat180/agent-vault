@@ -89,7 +89,7 @@ check "a short value is redacted" test "$out" = '[[REDACTED]]'
 
 meta='a.b*c+d(e)[f]$g\\h'
 printf '%s' "$meta" | agent-vault set TEST_META >/dev/null
-out=$(vault-run TEST_META "metacharacters" -- sh -c 'echo "v=$AGENT_VAULT_SECRET"; echo "axbbbcd"')
+out=$(vault-run TEST_META "metacharacters" -- sh -c 'printf "v=%s\n" "$AGENT_VAULT_SECRET"; echo "axbbbcd"')
 check "regex metacharacters are matched literally" test "$out" = $'v=[REDACTED]\naxbbbcd'
 
 printf '%s' "legacy-value-1234" | secret-tool store --label="pi-vault: OLD_ONE" service pi-vault account OLD_ONE
