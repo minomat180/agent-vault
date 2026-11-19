@@ -1,0 +1,32 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install dependencies
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends gnome-keyring libsecret-tools dbus shellcheck
+      - name: ShellCheck
+        run: shellcheck -S warning bin/vault-run linux/agent-vault install.sh macos/build.sh tests/linux.sh docs/demo-shell.sh
+      - name: End-to-end tests
+        run: ./tests/linux.sh
+
+  macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build the Swift helper
+        run: ./macos/build.sh
+      - name: Usage check
+        run: |
+          out=$(./macos/agent-vault 2>&1 || true)
+          grep -q '^agent-vault: usage' <<<"$out"

@@ -14,7 +14,7 @@ esac
 ln -sfn "$backend" ~/.local/bin/agent-vault
 ln -sfn "$repo/bin/vault-run" ~/.local/bin/vault-run
 if [[ -e ~/.claude/skills/vault && ! -L ~/.claude/skills/vault ]]; then
-  echo "~/.claude/skills/vault is a real directory; move it away first" >&2; exit 1
+  echo "$HOME/.claude/skills/vault is a real directory; move it away first" >&2; exit 1
 fi
 ln -sfn "$repo/skill" ~/.claude/skills/vault
 echo "installed: agent-vault -> $backend, vault-run, skill vault"

@@ -22,8 +22,8 @@ agent-vault list
 Run one command with a secret:
 
 ```bash
-vault-run CLOUDFLARE_API_TOKEN "verify the token works" -- \
-  sh -c 'curl -sH "Authorization: Bearer $AGENT_VAULT_SECRET" https://api.cloudflare.com/client/v4/user/tokens/verify'
+vault-run GITHUB_TOKEN "list my repos" -- \
+  sh -c 'curl -sH "Authorization: Bearer $AGENT_VAULT_SECRET" https://api.github.com/user/repos'
 ```
 
 - The secret is in `$AGENT_VAULT_SECRET` for that one process only. Reference
