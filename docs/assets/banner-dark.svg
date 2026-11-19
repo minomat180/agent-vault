@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 320" width="1280" height="320" role="img" aria-label="agent-vault">
+  <rect x="0.5" y="0.5" width="1279" height="319" rx="12" fill="#0d1117" stroke="#30363d"/>
+  <rect x="80" y="96" width="56" height="6" fill="#e3b341"/>
+  <text x="80" y="196" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-weight="700" font-size="84" fill="#e6edf3">agent-vault</text>
+  <text x="80" y="248" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-weight="400" font-size="24" fill="#8b949e">Use a secret in a command without the agent seeing it</text>
+  <g>
+    <rect x="950" y="60" width="200" height="200" rx="20" fill="none" stroke="#e3b341" stroke-width="2"/>
+    <circle cx="1050" cy="132" r="30" fill="#e3b341"/>
+    <path d="M1036 150 L1064 150 L1074 214 L1026 214 Z" fill="#e3b341"/>
+    <rect x="984" y="172" width="132" height="22" fill="#e6edf3"/>
+  </g>
+</svg>
