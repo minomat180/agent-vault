@@ -19,7 +19,11 @@ fi
 printf 'demo' | gnome-keyring-daemon --foreground --unlock --components=secrets >/dev/null 2>&1 &
 keyring_pid=$!
 trap 'kill "$keyring_pid" 2>/dev/null' EXIT HUP TERM
-for _ in $(seq 50); do secret-tool search --all service none >/dev/null 2>&1 && break; sleep 0.1; done
+for _ in $(seq 100); do
+  dbus-send --session --print-reply --dest=org.freedesktop.DBus /org/freedesktop/DBus \
+    org.freedesktop.DBus.NameHasOwner string:org.freedesktop.secrets 2>/dev/null | grep -q 'boolean true' && break
+  sleep 0.1
+done
 printf 'demo-3f9a1c7e5b2d8046' | agent-vault set DEMO_TOKEN >/dev/null
 cd "$HOME"
 bash --noprofile --rcfile <(printf '%s\n' "PS1='\[\e[2m\]\$\[\e[0m\] '" 'clear') || true

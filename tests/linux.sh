@@ -3,12 +3,12 @@
 # gnome-keyring on a private D-Bus session. HOME, XDG dirs and the keyring all
 # live in a temp directory, so your real keyring and audit log are never used.
 #
-# Needs: dbus-run-session, gnome-keyring-daemon, secret-tool, perl.
+# Needs: dbus-run-session, dbus-send, gnome-keyring-daemon, secret-tool, perl.
 set -euo pipefail
 repo=$(cd "$(dirname "$0")/.." && pwd)
 
 if [[ -z ${AGENT_VAULT_TEST_INNER:-} ]]; then
-  for t in dbus-run-session gnome-keyring-daemon secret-tool perl; do
+  for t in dbus-run-session dbus-send gnome-keyring-daemon secret-tool perl; do
     command -v "$t" >/dev/null || { echo "missing: $t" >&2; exit 2; }
   done
   tmp=$(mktemp -d)
@@ -28,7 +28,14 @@ fi
 printf 'test' | gnome-keyring-daemon --foreground --unlock --components=secrets >/dev/null 2>&1 &
 keyring_pid=$!
 trap 'kill "$keyring_pid" 2>/dev/null' EXIT
-for _ in $(seq 50); do secret-tool search --all service none >/dev/null 2>&1 && break; sleep 0.1; done
+# Wait for the name without touching it, so D-Bus activation cannot start a
+# second, locked daemon first.
+has_owner() {
+  dbus-send --session --print-reply --dest=org.freedesktop.DBus /org/freedesktop/DBus \
+    org.freedesktop.DBus.NameHasOwner string:org.freedesktop.secrets 2>/dev/null | grep -q 'boolean true'
+}
+for _ in $(seq 100); do has_owner && break; sleep 0.1; done
+has_owner || { echo "gnome-keyring did not start" >&2; exit 2; }
 [[ $(command -v agent-vault) == "$AGENT_VAULT_TEST_INNER/bin/agent-vault" ]] ||
   { echo "agent-vault on PATH is not the repo copy; refusing to run" >&2; exit 2; }
 if secret-tool search --all service agent-vault 2>&1 >/dev/null | grep -q "^attribute"; then
@@ -75,6 +82,15 @@ multi=$'first-line-secret\nsecond-line-secret'
 printf '%s' "$multi" | agent-vault set TEST_MULTI >/dev/null
 out=$(vault-run TEST_MULTI "multi-line" -- sh -c 'printf "%s\n" "$AGENT_VAULT_SECRET"; echo "x second-line-secret x"')
 check "multi-line value is redacted line by line" test "$out" = $'[REDACTED]\n[REDACTED]\nx [REDACTED] x'
+
+printf '%s' 'abc' | agent-vault set TEST_SHORT >/dev/null
+out=$(vault-run TEST_SHORT "short" -- sh -c 'echo "[$AGENT_VAULT_SECRET]"')
+check "a short value is redacted" test "$out" = '[[REDACTED]]'
+
+meta='a.b*c+d(e)[f]$g\\h'
+printf '%s' "$meta" | agent-vault set TEST_META >/dev/null
+out=$(vault-run TEST_META "metacharacters" -- sh -c 'echo "v=$AGENT_VAULT_SECRET"; echo "axbbbcd"')
+check "regex metacharacters are matched literally" test "$out" = $'v=[REDACTED]\naxbbbcd'
 
 printf '%s' "legacy-value-1234" | secret-tool store --label="pi-vault: OLD_ONE" service pi-vault account OLD_ONE
 check "legacy items are listed" sh -c 'agent-vault list 2>/dev/null | grep -qx OLD_ONE'

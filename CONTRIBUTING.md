@@ -8,6 +8,3 @@ Before sending a change, run `./tests/linux.sh` and
 `shellcheck -S warning bin/vault-run linux/agent-vault install.sh macos/build.sh tests/linux.sh docs/demo-shell.sh`.
 Changes to `macos/agent-vault.swift` need a manual check on a Mac: `set`,
 `get` through `vault-run` (Touch ID prompt appears), `list`, `delete`.
-
-If you fork it: `skill/SKILL.md` describes my two machines; rewrite it for
-yours.
