@@ -1,9 +1,31 @@
 # Security policy
 
-Please report vulnerabilities privately through [GitHub Security Advisories](https://github.com/mino-shared/agent-vault/security/advisories/new) rather than a public issue.
+Report vulnerabilities privately through
+[GitHub Security Advisories](https://github.com/minomat180/agent-vault/security/advisories/new),
+not in a public issue. This is a one-person project; expect a reply within a
+week or two, not hours.
 
-Read the README's Linux "Not a security boundary" note first: on Linux an
-agent with shell access can read any secret with one `secret-tool` command
-while the keyring is unlocked. That is a known, documented limitation. Anything
-beyond it (a way to read a macOS item without Touch ID, or to get a value into
-the output of `vault-run`) is a real finding.
+Read the threat model in the [README](README.md#threat-model) first. These are
+known and documented, not vulnerabilities:
+
+- On Linux any process of the same user can read every item with `secret-tool`
+  while the keyring is unlocked. There is no prompt.
+- The command that `vault-run` starts receives the real value and can do
+  anything with it, including printing it in an encoded form that redaction
+  does not match.
+- On macOS the helper does not check its caller: an agent can run
+  `agent-vault get` itself, and if you approve that Touch ID prompt the value
+  is printed unredacted. The prompt looks the same as one from `vault-run`.
+- The value is in the environment of the command and of the redactor while
+  they run.
+- `set` and `delete` need no approval.
+- The audit log is a plain, editable file and only covers `vault-run`.
+
+Real findings, for example:
+
+- reading a macOS item without a Touch ID or login-password prompt, through the
+  helper or around it
+- the literal value, whole on one output line (or a line of 8+ characters of a
+  multi-line value), reaching `vault-run`'s output unredacted
+- the value reaching argv, the audit log, or any file written by these scripts
+- `agent-vault set` or `migrate` exposing the value to another process
