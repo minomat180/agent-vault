@@ -9,7 +9,7 @@
 
 ### Use a secret in a command without the agent seeing it
 
-**Your coding agent gets to run `curl` with your API token; the token itself never shows up in the chat.**
+**Your coding agent (Claude Code, or any agent with a shell) runs `curl` with your API token and reads `[REDACTED]` where the token was.**
 
 [![License](https://img.shields.io/github/license/minomat180/agent-vault?style=flat-square&color=e3b341)](LICENSE)
 [![CI](https://img.shields.io/github/actions/workflow/status/minomat180/agent-vault/ci.yml?branch=main&style=flat-square&label=ci)](https://github.com/minomat180/agent-vault/actions/workflows/ci.yml)
@@ -19,13 +19,13 @@
 
 [Quick start](#quick-start) · [How it works](#how-it-works) · [Threat model](#threat-model) · [Tests](#tests)
 
-<code>git clone https://github.com/minomat180/agent-vault && cd agent-vault && ./install.sh</code>
+`git clone https://github.com/minomat180/agent-vault && cd agent-vault && ./install.sh`
 
 <br><br>
 
 <img src="docs/demo.gif" width="1000" alt="agent-vault on Linux: list, a refused direct read, two vault-run calls, the audit log">
 
-<sub>Recorded on Linux against a throwaway keyring holding one fake secret (<code>docs/demo.tape</code>). The <code>21</code> is the fake value's length, so the command did receive it.</sub>
+<sub>Recorded on Linux against a throwaway keyring holding one fake secret (<code>docs/demo.tape</code>, <code>docs/demo-shell.sh</code>). The <code>21</code> is the fake value's length, so the command did receive it.</sub>
 
 </div>
 
@@ -55,15 +55,17 @@ vault-run GITHUB_TOKEN "list my repos" -- \
   keychain items and asks for Touch ID (login password as fallback) before each
   read, with the text `release the secret "NAME" to an agent: REASON`. The
   agent can start that prompt but cannot answer it.
-- **Every call leaves an audit line.** `~/.local/state/agent-vault/audit.log`
-  gets one JSON line per `vault-run` call with valid arguments: time, host,
-  name, reason, working directory, command, and whether the secret was released.
-  Never the value.
-- **It behaves like the command it wraps.** The exit status is the command's,
-  so scripts and agents can keep checking `$?`.
+- **Each `vault-run` call is logged.** `~/.local/state/agent-vault/audit.log`
+  gets one JSON line per call with valid arguments: time, host, name, reason,
+  working directory, command, and whether the secret was released (`released`,
+  `not-released`, `empty`). Never the value.
+- **The exit status is the command's.** Scripts and agents can keep checking
+  `$?`.
 
 > [!NOTE]
-> The recording above was made on Linux, where there is no prompt. The macOS
+> On Linux there is no prompt and any process of the same user can read the
+> keyring, so there it prevents accidents, not a hostile agent; see
+> [Threat model](#threat-model). The recording is from Linux, so the macOS
 > Touch ID flow is not in it.
 
 ## Platforms
@@ -85,11 +87,10 @@ cd agent-vault
 Claude Code skill `skill/` to `~/.claude/skills/vault`. On macOS it first builds
 the helper with `macos/build.sh` (ad-hoc signed).
 
-> [!TIP]
-> `~/.local/bin` must be on your `PATH`; otherwise `vault-run` cannot find
-> `agent-vault` and reports the secret as not released. After pulling a change
-> to the Swift source, run `macos/build.sh` again; `install.sh` only builds when
-> the binary is missing.
+`~/.local/bin` must be on your `PATH`; otherwise `vault-run` cannot find
+`agent-vault` and reports the secret as not released. After pulling a change to
+the Swift source, run `macos/build.sh` again; `install.sh` only builds when the
+binary is missing.
 
 Add secrets yourself, not through the agent:
 
@@ -154,8 +155,9 @@ read.
 > base64-encoded or reversed; redaction only matches the literal value. On
 > macOS the Touch ID prompt is the only check, and it shows the name and the
 > agent's stated reason, not the command. A direct `agent-vault get` shows the
-> same prompt as `vault-run` and, if approved, prints the value unredacted. Read
-> the reason before you approve.
+> same prompt as `vault-run` (the helper does not check who called it) and, if
+> approved, prints the value unredacted into the agent's output. Read the reason
+> before you approve.
 
 **What else it does not protect against**
 
